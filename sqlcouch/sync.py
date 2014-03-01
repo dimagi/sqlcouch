@@ -1,7 +1,9 @@
 import sys
+from django.core.management.base import OutputWrapper
 from django.db.models import Q
-from sqldoc.exceptions import NoMoreData
-from sqldoc.models import SQLDocModel, SQLDocAttachment
+from restkit import RequestFailed
+from sqlcouch.exceptions import NoMoreData
+from sqlcouch.models import SQLDocModel, SQLDocAttachment
 from collections import defaultdict
 import json
 from dimagi.utils.couch.database import get_db
@@ -12,7 +14,7 @@ def assert_equal(one, *args):
         raise AssertionError('Not all equal: {0}'.format((one,) + args))
 
 
-def sync_all(limit=10, force_save=False, stdout=sys.stdout):
+def sync_all(limit=10, force_save=False, stdout=OutputWrapper(sys.stdout)):
     while True:
         try:
             batch_sync(limit=limit, force_save=force_save, stdout=stdout)
@@ -30,11 +32,11 @@ def batch_sync(limit=10, force_save=False, stdout=sys.stdout):
         raise NoMoreData()
 
     sqlatts = (SQLDocAttachment.objects.select_for_update()
-               .filter(doc_id__in=ids)).all()
+               .filter(doc__in=ids)).all()
 
     sql_attachments = defaultdict(list)
     for sqlatt in sqlatts:
-        sql_attachments[sqlatt.doc_id.doc_id].append(sqlatt)
+        sql_attachments[sqlatt.doc.doc_id].append(sqlatt)
 
     db = get_db()
     couch_results = db.all_docs(keys=ids, include_docs=True).all()
@@ -45,26 +47,23 @@ def batch_sync(limit=10, force_save=False, stdout=sys.stdout):
         couch_json = result.get('doc')
         if couch_json:
             if not force_save:
-                assert_equal(
-                    couch_json.get('_rev'),
-                    sqldoc.rev,
-                )
+                assert_equal(couch_json.get('_rev'), sqldoc.rev)
             sqldoc_json.pop('_rev', None)
             couch_json.update(sqldoc_json)
         else:
             couch_json = sqldoc_json
+            couch_json.pop('_rev', None)
         if '_attachments' not in couch_json:
             couch_json['_attachments'] = {}
         for sqlatt in sql_attachments[sqldoc.doc_id]:
-            assert_equal(sqlatt.doc_id.doc_id, sqldoc.doc_id,
-                         couch_json['_id'])
+            assert_equal(sqlatt.doc.doc_id, sqldoc.doc_id, couch_json['_id'])
             couch_json['_attachments'][sqlatt.name] = {
                 'content_type': sqlatt.content_type,
                 # payload is base64 encoded already
                 'data': sqlatt.payload,
             }
         new_docs.append(couch_json)
-    save_results = db.bulk_save(new_docs, all_or_nothing=True)
+    save_results = db.bulk_save(new_docs)
     for sqldoc, result in zip(sqldocs, save_results):
         assert sqldoc.doc_id == result['id']
         rev = result['rev']

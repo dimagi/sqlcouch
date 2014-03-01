@@ -4,8 +4,8 @@ from django.core.management import BaseCommand
 from django.db import transaction
 import time
 import signal
-from sqldoc.exceptions import NoMoreData
-from sqldoc.sync import batch_sync
+from sqlcouch.exceptions import NoMoreData
+from sqlcouch.sync import batch_sync
 
 
 class DelayedKeyboardInterrupt(object):
